@@ -1,6 +1,4 @@
-﻿// Crest Ocean System
-
-// This file is subject to the MIT License as seen in the root of this folder structure (LICENSE)
+﻿// This file is subject to the MIT License as seen in the root of this folder structure (LICENSE)
 
 //#define PROFILE_CONSTRUCTION
 
@@ -230,6 +228,25 @@ namespace Crest
                 nextLod.transform.localScale = new Vector3( horizScale, 1f, horizScale );
             }
 
+            //Build CrossSection Meshes
+            int FrontmeshWidth = 200;
+            GameObject parent = new GameObject();
+            parent.name = "CrossSection";
+            parent.transform.localPosition = new Vector3(0.0f, 0.0f, 0.3f);
+            parent.transform.localRotation = Quaternion.identity;
+
+            for(int i = 0; i < FrontmeshWidth; i++) {
+                GameObject crossSectionPatch = new GameObject();
+                crossSectionPatch.name = "CrossSectionPatch" + i;
+                crossSectionPatch.transform.parent = parent.transform;
+                crossSectionPatch.transform.position = new Vector3( -(FrontmeshWidth / 2) * 8 + i * 8, 10.0f, 0.0f );
+                crossSectionPatch.AddComponent<MeshFilter>();
+                var mr = crossSectionPatch.AddComponent<MeshRenderer>();
+                mr.material = ocean.CsMaterial;      
+                crossSectionPatch.AddComponent<UnderwaterCrossSection>();
+                crossSectionPatch.transform.localRotation = Quaternion.Euler(90, 180, 0); 
+            }
+
 #if PROFILE_CONSTRUCTION
             sw.Stop();
             Debug.Log( "Finished generating " + parms._lodCount.ToString() + " LODs, time: " + (1000.0*sw.Elapsed.TotalSeconds).ToString(".000") + "ms" );
@@ -454,7 +471,7 @@ namespace Crest
             }
 
             // create the ocean patches
-            for( int i = 0; i < offsets.Length; i++ )
+            for( int i = 0; i < offsets.Length-4; i++ )
             {
                 // instantiate and place patch
                 var patch = new GameObject( string.Format( "Tile_L{0}", lodIndex ) );

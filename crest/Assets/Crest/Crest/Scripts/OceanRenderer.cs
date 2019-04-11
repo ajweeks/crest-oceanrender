@@ -1,20 +1,17 @@
-﻿// Crest Ocean System
-
-// This file is subject to the MIT License as seen in the root of this folder structure (LICENSE)
+﻿// This file is subject to the MIT License as seen in the root of this folder structure (LICENSE)
 
 using UnityEngine;
 
 namespace Crest
 {
     /// <summary>
-    /// The main script for the ocean system. Attach this to a GameObject to create an ocean. This script initialises the various data types and systems
-    /// and moves/scales the ocean based on the viewpoint. It also hosts a number of global settings that can be tweaked here.
+    /// Scales the ocean horizontally based on the camera height, to keep geometry detail uniform-ish in screen space.
     /// </summary>
     public class OceanRenderer : MonoBehaviour
     {
         [Tooltip("The viewpoint which drives the ocean detail. Defaults to main camera."), SerializeField]
         Transform _viewpoint;
-        public Transform Viewpoint { get { return _viewpoint; } }
+        public Transform Viewpoint { get { return _viewpoint; } set { _viewpoint = value; } }
 
         [Tooltip("Optional provider for time, can be used to hardcode time for automation, or provide server time. Defaults to local Unity time."), SerializeField]
         TimeProviderBase _timeProvider;
@@ -26,6 +23,10 @@ namespace Crest
         [SerializeField, Tooltip("Material to use for the ocean surface")]
         Material _material = null;
         public Material OceanMaterial { get { return _material; } }
+
+        [SerializeField, Tooltip("Material to use for the ocean cross section")]
+        Material _csmaterial = null;
+        public Material CsMaterial { get { return _csmaterial; } }
 
         [SerializeField]
         string _layerName = "Water";
@@ -56,10 +57,10 @@ namespace Crest
         int _lodDataResolution = 256;
         public int LodDataResolution { get { return _lodDataResolution; } }
 
-        [SerializeField, Delayed, Tooltip("How much of the water shape gets tessellated by geometry. If set to e.g. 4, every geometry quad will span 4x4 LOD data texels. Use power of 2 values like 1, 2, 4...")]
+        [SerializeField, Delayed, Tooltip("How much of the water shape gets tessellated by geometry. If set to e.g. 4, every geometry quad will cover 4x4 LOD data texels. Use power of 2 values like 1, 2, 4...")]
         int _geometryDownSampleFactor = 2;
 
-        [SerializeField, Tooltip("Number of ocean tile scales/LODs to generate."), Range(2, LodDataMgr.MAX_LOD_COUNT)]
+        [SerializeField, Delayed, Tooltip("Number of ocean tile scales/LODs to generate."), Range(2, LodDataMgr.MAX_LOD_COUNT)]
         int _lodCount = 7;
 
 
@@ -96,12 +97,11 @@ namespace Crest
 
         [Header("Debug Params")]
 
-        [Tooltip("Whether to generate ocean geometry tiles uniformly (with overlaps).")]
+        [Tooltip("Whether to generate ocean geometry tiles uniformly (with overlaps)")]
         public bool _uniformTiles = false;
-        [Tooltip("Disable generating a wide strip of triangles at the outer edge to extend ocean to edge of view frustum.")]
+        [Tooltip("Disable generating a wide strip of triangles at the outer edge to extend ocean to edge of view frustum")]
         public bool _disableSkirt = false;
-        [Tooltip("Move ocean with viewpoint.")]
-        public bool _followViewpoint = true;
+
 
         float _viewerAltitudeLevelAlpha = 0f;
         /// <summary>
@@ -121,9 +121,6 @@ namespace Crest
         [HideInInspector] public LodDataMgrFlow _lodDataFlow;
         [HideInInspector] public LodDataMgrFoam _lodDataFoam;
         [HideInInspector] public LodDataMgrShadow _lodDataShadow;
-        /// <summary>
-        /// The number of LODs/scales that the ocean is currently using.
-        /// </summary>
         public int CurrentLodCount { get { return _lods.Length; } }
 
         /// <summary>
@@ -142,7 +139,7 @@ namespace Crest
                 return;
             }
 
-            Instance = this;
+            _instance = this;
 
             OceanBuilder.GenerateMesh(this, _lodDataResolution, _geometryDownSampleFactor, _lodCount);
 
@@ -184,7 +181,7 @@ namespace Crest
             UpdateCollision();
         }
 
-        void UpdateCollision()
+        public void UpdateCollision()
         {
             if (_simSettingsAnimatedWaves.CachedHeightQueries)
             {
@@ -199,13 +196,9 @@ namespace Crest
             Shader.SetGlobalVector("_WindDirXZ", WindDir);
             Shader.SetGlobalFloat("_CrestTime", CurrentTime);
 
-            if (_followViewpoint)
-            {
-                LateUpdatePosition();
-                LateUpdateScale();
-                LateUpdateViewerHeight();
-            }
-
+            LateUpdatePosition();
+            LateUpdateScale();
+            LateUpdateViewerHeight();
             LateUpdateLods();
         }
 
@@ -216,7 +209,7 @@ namespace Crest
             // maintain y coordinate - sea level
             pos.y = transform.position.y;
 
-            transform.position = pos;
+            transform.position = new Vector3(pos.x, pos.y, 0.0f);
 
             Shader.SetGlobalVector("_OceanCenterPosWorld", transform.position);
         }
@@ -261,8 +254,6 @@ namespace Crest
 
         void LateUpdateLods()
         {
-            // Do any per-frame update for each LOD type.
-
             foreach (var lt in _lods)
             {
                 lt.UpdateTransform();
@@ -276,14 +267,36 @@ namespace Crest
             if (_lodDataShadow) _lodDataShadow.UpdateLodData();
         }
 
-        /// <summary>
-        /// Could the ocean horizontal scale increase (for e.g. if the viewpoint gains altitude). Will be false if ocean already at maximum scale.
-        /// </summary>
+        private void OnDestroy()
+        {
+            _instance = null;
+        }
+
+        [ContextMenu("Regenerate mesh")]
+        void RegenMesh()
+        {
+            OceanBuilder.GenerateMesh(this, _lodDataResolution, _geometryDownSampleFactor, _lodCount);
+        }
+#if UNITY_EDITOR
+        [ContextMenu("Regenerate mesh", true)]
+        bool RegenPossible() { return UnityEditor.EditorApplication.isPlaying; }
+#endif
+
         public bool ScaleCouldIncrease { get { return _maxScale == -1f || transform.localScale.x < _maxScale * 0.99f; } }
-        /// <summary>
-        /// Could the ocean horizontal scale decrease (for e.g. if the viewpoint drops in altitude). Will be false if ocean already at minimum scale.
-        /// </summary>
         public bool ScaleCouldDecrease { get { return _minScale == -1f || transform.localScale.x > _minScale * 1.01f; } }
+
+        public int GetLodIndex(float gridSize)
+        {
+            //gridSize = 4f * transform.lossyScale.x * Mathf.Pow(2f, result) / _lodDataResolution;
+            int result = Mathf.RoundToInt(Mathf.Log(_lodDataResolution * gridSize / (4f * transform.lossyScale.x)) / Mathf.Log(2f));
+
+            if (result < 0 || result >= _lodCount)
+            {
+                result = -1;
+            }
+
+            return result;
+        }
 
         /// <summary>
         /// Shape scripts can report in how far they might displace the shape horizontally. The max value is saved here.
@@ -312,43 +325,13 @@ namespace Crest
         /// </summary>
         public float MaxVertDisplacement { get { return _maxVertDispFromShape; } }
 
-        public static OceanRenderer Instance { get; private set; }
+        static OceanRenderer _instance;
+        public static OceanRenderer Instance { get { return _instance ?? (_instance = FindObjectOfType<OceanRenderer>()); } }
 
         /// <summary>
         /// Provides ocean shape to CPU.
         /// </summary>
         ICollProvider _collProvider;
         public ICollProvider CollisionProvider { get { return _collProvider != null ? _collProvider : (_collProvider = _simSettingsAnimatedWaves.CreateCollisionProvider()); } }
-
-#if UNITY_EDITOR
-        private void OnValidate()
-        {
-            // Must be at least 0.25, and must be on a power of 2
-            _minScale = Mathf.Pow(2f, Mathf.Round(Mathf.Log(Mathf.Max(_minScale, 0.25f), 2f)));
-
-            // Max can be -1 which means no maximum
-            if (_maxScale != -1f)
-            {
-                // otherwise must be at least 0.25, and must be on a power of 2
-                _maxScale = Mathf.Pow(2f, Mathf.Round(Mathf.Log(Mathf.Max(_maxScale, _minScale), 2f)));
-            }
-
-            // Gravity 0 makes waves freeze which is weird but doesn't seem to break anything so allowing this for now
-            _gravityMultiplier = Mathf.Max(_gravityMultiplier, 0f);
-
-            // LOD data resolution multiple of 2 for general GPU texture reasons (like pixel quads)
-            _lodDataResolution -= _lodDataResolution % 2;
-
-            _geometryDownSampleFactor = Mathf.ClosestPowerOfTwo(Mathf.Max(_geometryDownSampleFactor, 1));
-
-            var remGeo = _lodDataResolution % _geometryDownSampleFactor;
-            if (remGeo > 0)
-            {
-                var newLDR = _lodDataResolution - (_lodDataResolution % _geometryDownSampleFactor);
-                Debug.LogWarning("Adjusted Lod Data Resolution from " + _lodDataResolution + " to " + newLDR + " to ensure the Geometry Down Sample Factor is a factor (" + _geometryDownSampleFactor + ").", this);
-                _lodDataResolution = newLDR;
-            }
-        }
-#endif
     }
 }
